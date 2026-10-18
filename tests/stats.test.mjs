@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  EMPTY_BUCKETS, foldSessionEvents, buildStats, localDay, usageOfEvent,
+  EMPTY_BUCKETS, foldSessionEvents, buildStats, localDay, usageOfEvent, streamDurationMs,
 } from '../lib/stats.js'
 
 const usage = (input, output, cacheRead = 0, cacheWrite = 0) => ({
@@ -242,4 +242,77 @@ test('a repeated compaction id is counted once', () => {
   assert.deepEqual(folded.days.get('2026-10-18'), {
     inputTokens: 10, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0,
   })
+})
+
+test('streamDurationMs reads packed gaps and raw chunk times', () => {
+  assert.equal(streamDurationMs([]), 0)
+  assert.equal(streamDurationMs([
+    { type: 'text-chunks', time0: 1000, index: 0, dt: [100, 250], texts: ['a', 'b', 'c'] },
+  ]), 350)
+  assert.equal(streamDurationMs([
+    { type: 'chunk', time: 1000, chunk: { type: 'text-delta', index: 0, text: 'a' } },
+    { type: 'chunk', time: 1500, chunk: { type: 'text-delta', index: 0, text: 'b' } },
+  ]), 500)
+})
+
+test('turn, step, and generation-speed aggregates track owned events', () => {
+  const events = [
+    { type: 'turn/start', time: 0, data: { turn: 1 } },
+    { type: 'step/start', time: 1, data: { turn: 1, step: 1 } },
+    {
+      type: 'assistant/message', time: 1400,
+      data: {
+        turn: 1, step: 1, usage: usage(10, 30),
+        stream: [{ type: 'text-chunks', time0: 1000, index: 0, dt: [100, 100, 100, 100], texts: ['a', 'b', 'c', 'd', 'e'] }],
+      },
+    },
+    { type: 'step/end', time: 1401, data: { turn: 1, step: 1 } },
+    { type: 'turn/end', time: 1402, data: { turn: 1, reason: { kind: 'completed' } } },
+  ]
+  const folded = foldSessionEvents(events, 0, () => '2026-10-18')
+  assert.equal(folded.turnCount, 1)
+  assert.equal(folded.stepCount, 1)
+  assert.equal(folded.generationMs, 400)
+  assert.equal(folded.timedOutputTokens, 30)
+  const result = buildStats({
+    daily: folded.days, sessionsByDay: new Map(), days: 'all',
+    now: new Date(2026, 9, 18, 12).getTime(), sessionCount: 1,
+    skippedSessions: 0, incomplete: false,
+    turnCount: folded.turnCount, stepCount: folded.stepCount,
+    generationMs: folded.generationMs, timedOutputTokens: folded.timedOutputTokens,
+  })
+  assert.deepEqual(result.activity, {
+    turns: 1, steps: 1, generationMs: 400, timedOutputTokens: 30, tokensPerSecond: 75,
+  })
+})
+
+test('a replacement sample replaces its generation duration too', () => {
+  const stream = (time0) => [{
+    type: 'text-chunks', time0, index: 0, dt: [500], texts: ['a', 'b'],
+  }]
+  const events = [
+    {
+      type: 'assistant/message', time: 1000,
+      data: { turn: 1, step: 1, usage: usage(10, 20), stream: stream(500) },
+    },
+    {
+      type: 'assistant/message', time: 2000,
+      data: { turn: 1, step: 1, usage: usage(10, 25), stream: stream(1500) },
+    },
+  ]
+  const folded = foldSessionEvents(events, 0, () => '2026-10-18')
+  assert.equal(folded.generationMs, 500)
+  assert.equal(folded.timedOutputTokens, 25)
+})
+
+test('fork-inherited lifecycle events are not counted as turns or steps', () => {
+  const events = [
+    { type: 'turn/start', time: 0, data: { turn: 1 } },
+    { type: 'step/start', time: 1, data: { turn: 1, step: 1 } },
+    message(2, 1, 1, usage(10, 1)),
+  ]
+  const folded = foldSessionEvents(events, 2, () => '2026-10-18')
+  assert.equal(folded.turnCount, 0)
+  assert.equal(folded.stepCount, 0)
+  assert.equal(folded.generationMs, 0)
 })

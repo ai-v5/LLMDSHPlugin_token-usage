@@ -9,6 +9,7 @@ DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **T
 - 按 provider 上报的 usage 统计，包含 `inputTokens`、`outputTokens`、`cacheReadTokens`、`cacheWriteTokens`。
 - 中文界面下大数字用「万 / 百万 / 亿」显示，悬停明细同时保留精确数字。
 - 日历显示最近 365 天；顶部总量覆盖全部历史。
+- 统计全部历史的轮次、步骤和平均生成速度（tok/s）。
 - 只读扫描 Session 历史，不修改任何 Session 或配置；fork 继承的事件不会重复计数。
 
 ## 安装
@@ -70,9 +71,18 @@ GET /api/llm-token-usage/stats?range=all&refresh=1
   "series": [{ "date": "2025-10-19", "...": "same shape as today" }],
   "sessionCount": 0,
   "skippedSessions": 0,
-  "incomplete": false
+  "incomplete": false,
+  "activity": {
+    "turns": 0,
+    "steps": 0,
+    "generationMs": 0,
+    "timedOutputTokens": 0,
+    "tokensPerSecond": 0
+  }
 }
 ```
+
+`activity` 为全部历史汇总：`turns`/`steps` 来自 `turn/start`/`step/start`；`tokensPerSecond = timedOutputTokens / (generationMs / 1000)`，只统计带流式时间戳的 Assistant 调用。
 
 结果缓存 60 秒；`refresh=1` 跳过缓存。
 

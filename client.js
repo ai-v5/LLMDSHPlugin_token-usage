@@ -34,6 +34,10 @@ window.__ModuleLoader__.load({
       sessions: '会话',
       today: '今日',
       activeDays: '活跃天数',
+      turns: '轮次',
+      steps: '步骤',
+      speed: '平均 tok/s',
+      speedHint: '按模型流式输出时长统计',
       calendarLabel: '每日 Token 用量日历',
       less: '少',
       more: '多',
@@ -63,6 +67,10 @@ window.__ModuleLoader__.load({
       sessions: 'Sessions',
       today: 'Today',
       activeDays: 'Active days',
+      turns: 'Turns',
+      steps: 'Steps',
+      speed: 'Avg tok/s',
+      speedHint: 'Based on model stream time',
       calendarLabel: 'Daily token usage calendar',
       less: 'Less',
       more: 'More',
@@ -127,6 +135,18 @@ window.__ModuleLoader__.load({
       const compact = formatTokens(value, language)
       const exact = formatFull(value, language)
       return compact === exact ? exact : `${compact}（${exact}）`
+    }
+
+    /** Whole activity count (turns, steps, sessions) with digit grouping. */
+    function formatCount(value, language = detectLanguage()) {
+      return Math.round(numberOf(value)).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US')
+    }
+
+    /** One decimal place for generation speed; an em dash when unavailable. */
+    function formatSpeed(value) {
+      const speed = Number(value)
+      if (!Number.isFinite(speed) || speed <= 0) return '—'
+      return speed >= 100 ? speed.toFixed(0) : speed.toFixed(1)
     }
 
     /** Local calendar day key (`YYYY-MM-DD`). */
@@ -445,6 +465,8 @@ window.__ModuleLoader__.load({
       const hasUsage = all !== null && numberOf(all.totalTokens) > 0
       const skipped = data !== null ? numberOf(data.skippedSessions) : 0
       const busy = state.status === 'loading' || state.status === 'idle'
+      const activity = data !== null && data.activity !== null && data.activity !== undefined
+        && typeof data.activity === 'object' ? data.activity : null
 
       const sections = []
       if (state.status === 'error') {
@@ -469,6 +491,23 @@ window.__ModuleLoader__.load({
           ]),
           h('div', { key: 'meta', className: 'llmtu-summary-meta' },
             `${t.today} ${formatTokens(today?.totalTokens)} · ${t.activeDays} ${activeDays} · ${t.sessions} ${numberOf(data.sessionCount)}`),
+        ]))
+        sections.push(h('div', { key: 'metrics', className: 'llmtu-metrics' }, [
+          h('div', { key: 'turns', className: 'llmtu-metric' }, [
+            h('span', { key: 'label', className: 'llmtu-metric-label' }, t.turns),
+            h('span', { key: 'value', className: 'llmtu-metric-value' },
+              activity === null ? '—' : formatCount(activity.turns)),
+          ]),
+          h('div', { key: 'steps', className: 'llmtu-metric' }, [
+            h('span', { key: 'label', className: 'llmtu-metric-label' }, t.steps),
+            h('span', { key: 'value', className: 'llmtu-metric-value' },
+              activity === null ? '—' : formatCount(activity.steps)),
+          ]),
+          h('div', { key: 'speed', className: 'llmtu-metric', title: t.speedHint }, [
+            h('span', { key: 'label', className: 'llmtu-metric-label' }, t.speed),
+            h('span', { key: 'value', className: 'llmtu-metric-value' },
+              formatSpeed(activity?.tokensPerSecond)),
+          ]),
         ]))
         sections.push(h(Calendar, { key: 'calendar', series, todayKey, t }))
         if (!hasUsage) sections.push(h('p', { key: 'empty', className: 'llmtu-note' }, t.empty))
@@ -570,6 +609,10 @@ window.__ModuleLoader__.load({
       .llmtu-summary-detail{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:18px;color:var(--dsw-alias-label-tertiary,#8b949e);font-variant-numeric:tabular-nums}
       .llmtu-summary-value{flex:none;font-size:22px;font-weight:600;line-height:28px;color:var(--dsw-alias-label-primary,#1f2328);font-variant-numeric:tabular-nums}
       .llmtu-summary-meta{margin-top:4px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#8b949e);font-variant-numeric:tabular-nums}
+      .llmtu-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
+      .llmtu-metric{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:0.5px solid var(--dsw-alias-border-l4,rgba(127,127,127,.14));border-radius:8px}
+      .llmtu-metric-label{font-size:10px;line-height:14px;color:var(--dsw-alias-label-tertiary,#8b949e)}
+      .llmtu-metric-value{font-size:15px;line-height:20px;font-weight:600;color:var(--dsw-alias-label-primary,#1f2328);font-variant-numeric:tabular-nums}
       .llmtu-cal{--llmtu-cell:9px;margin-top:14px}
       .llmtu-cal-months{display:grid;column-gap:2px;height:14px;margin:0 0 2px 28px;color:var(--dsw-alias-label-caption,#8b949e);font-size:9px;line-height:12px;white-space:nowrap}
       .llmtu-cal-month{grid-row:1;overflow:visible}
