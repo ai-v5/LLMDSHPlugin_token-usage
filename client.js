@@ -550,7 +550,7 @@ window.__ModuleLoader__.load({
       .llmtu-icon-button{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-tertiary,#8b949e);cursor:pointer}
       .llmtu-icon-button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.14));color:var(--dsw-alias-label-primary,#1f2328)}
       .llmtu-icon-button:disabled{opacity:.4;cursor:default}
-      .llmtu-body{flex:1;min-height:0;overflow-y:auto;padding:0 12px 12px}
+      .llmtu-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 12px 12px}
       .llmtu-summary{padding:10px 12px;border:0.5px solid var(--dsw-alias-border-l4,rgba(127,127,127,.14));border-radius:10px}
       .llmtu-summary-head{display:flex;align-items:baseline;gap:10px;min-width:0}
       .llmtu-summary-label{flex:none;font-size:13px;font-weight:600;line-height:20px;color:var(--dsw-alias-label-primary,#1f2328)}
