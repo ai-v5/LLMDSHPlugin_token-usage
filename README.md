@@ -7,6 +7,7 @@ DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **T
 - 左下角 footer 常驻入口，显示今日 token 总量。
 - 点击展开统计面板：第一行是**全部历史总量**，下面是 GitHub 风格的每日日历热力图；颜色深浅表示当天用量，鼠标悬停/键盘聚焦可看当天总量、输入+输出、缓存读写和会话数。
 - 按 provider 上报的 usage 统计，包含 `inputTokens`、`outputTokens`、`cacheReadTokens`、`cacheWriteTokens`。
+- 中文界面下大数字用「万 / 百万 / 亿」显示，悬停明细同时保留精确数字。
 - 日历显示最近 365 天；顶部总量覆盖全部历史。
 - 只读扫描 Session 历史，不修改任何 Session 或配置；fork 继承的事件不会重复计数。
 

@@ -101,9 +101,15 @@ window.__ModuleLoader__.load({
       return text.indexOf('.') === -1 ? text : text.replace(/\.?0+$/, '')
     }
 
-    /** Compact token count: 1234, 12.3K, 345K, 1.2M, 3.4B. */
-    function formatTokens(value) {
+    /** Compact token count: Chinese 万/百万/亿, or K/M/B for English. */
+    function formatTokens(value, language = detectLanguage()) {
       const count = Math.round(numberOf(value))
+      if (language === 'zh') {
+        if (count < 1e4) return count.toLocaleString('zh-CN')
+        if (count < 1e6) return trimFraction((count / 1e4).toFixed(2)) + '万'
+        if (count < 1e8) return trimFraction((count / 1e6).toFixed(2)) + '百万'
+        return trimFraction((count / 1e8).toFixed(2)) + '亿'
+      }
       if (count < 1000) return String(count)
       if (count >= 1e9) return trimFraction((count / 1e9).toFixed(2)) + 'B'
       if (count >= 999950) return trimFraction((count / 1e6).toFixed(2)) + 'M'
@@ -114,6 +120,13 @@ window.__ModuleLoader__.load({
     /** Exact token count with locale digit grouping. */
     function formatFull(value, language) {
       return (Number(value) || 0).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US')
+    }
+
+    /** Compact Chinese/English unit plus the exact count when rounding changed it. */
+    function formatCompactDetail(value, language) {
+      const compact = formatTokens(value, language)
+      const exact = formatFull(value, language)
+      return compact === exact ? exact : `${compact}（${exact}）`
     }
 
     /** Local calendar day key (`YYYY-MM-DD`). */
@@ -327,10 +340,10 @@ window.__ModuleLoader__.load({
           role: 'tooltip',
         }, [
           h('strong', { key: 'date', className: 'llmtu-cal-tip-date' }, hover.key),
-          h('div', { key: 'total' }, `${t.total} ${formatFull(hover.day.totalTokens, language)}`),
-          h('div', { key: 'io' }, `${t.inputOutput} ${formatFull(hover.day.inputOutputTokens, language)}`),
+          h('div', { key: 'total' }, `${t.total} ${formatCompactDetail(hover.day.totalTokens, language)}`),
+          h('div', { key: 'io' }, `${t.inputOutput} ${formatCompactDetail(hover.day.inputOutputTokens, language)}`),
           h('div', { key: 'cache' },
-            `${t.cacheRead} ${formatFull(hover.day.cacheReadTokens, language)} · ${t.cacheWrite} ${formatFull(hover.day.cacheWriteTokens, language)}`),
+            `${t.cacheRead} ${formatCompactDetail(hover.day.cacheReadTokens, language)} · ${t.cacheWrite} ${formatCompactDetail(hover.day.cacheWriteTokens, language)}`),
           h('div', { key: 'sessions' }, `${t.sessions} ${numberOf(hover.day.sessions)}`),
         ]),
         document.body,
