@@ -1,14 +1,19 @@
 /** Host half: expose per-day token usage from the Session corpus. */
+import { createSessionLedger } from './lib/ledger.js'
 import { createTokenUsageService, normalizeRange } from './lib/stats.js'
 
 export const name = 'llm-token-usage'
 
-export const inject = ['sessionQuery', 'connection']
+export const inject = ['sessionQuery', 'connection', 'dshHomePath']
 
 const STATS_PATH = '/api/llm-token-usage/stats'
 
 export function apply(ctx) {
-  const service = createTokenUsageService(ctx.sessionQuery)
+  const ledger = createLedger(ctx)
+  const service = createTokenUsageService(ctx.sessionQuery, {
+    ...(ledger === undefined ? {} : { ledger }),
+    logger: ctx.logger,
+  })
   ctx.effect(() => {
     const dispose = ctx.connection.fetch.register({
       path: STATS_PATH,
@@ -18,6 +23,13 @@ export function apply(ctx) {
     })
     return () => { void dispose() }
   }, 'llm-token-usage: stats route')
+}
+
+/** Use the Host home service when present; tests and embedded callers may omit it. */
+function createLedger(ctx) {
+  return typeof ctx.dshHomePath === 'function'
+    ? createSessionLedger(ctx.dshHomePath('token-usage-ledger.json'))
+    : undefined
 }
 
 async function handle(ctx, service, request) {

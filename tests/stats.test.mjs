@@ -1,8 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
-  EMPTY_BUCKETS, foldSessionEvents, buildStats, localDay, usageOfEvent, streamDurationMs,
+  EMPTY_BUCKETS, foldSessionEvents, buildStats, localDay, usageOfEvent, streamDurationMs, collectTokenUsage,
 } from '../lib/stats.js'
+import { createSessionLedger } from '../lib/ledger.js'
 
 const usage = (input, output, cacheRead = 0, cacheWrite = 0) => ({
   inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
@@ -332,4 +336,66 @@ test('the host service keeps its default cache for one hour', async () => {
   now = 61 * 60 * 1000
   await service.read({ range: 30 })
   assert.equal(scans, 2)
+})
+
+const ledgerEntry = (input, output, turnCount = 1, stepCount = 1) => ({
+  days: new Map([['2026-10-19', {
+    inputTokens: input, outputTokens: output, cacheReadTokens: 0, cacheWriteTokens: 0,
+  }]]),
+  turnCount,
+  stepCount,
+  generationMs: 100,
+  timedOutputTokens: output,
+})
+
+test('the Session ledger round-trips its durable shape', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  try {
+    const path = join(directory, 'ledger.json')
+    const ledger = createSessionLedger(path)
+    await ledger.save(new Map([['session-1', ledgerEntry(10, 2, 3, 4)]]))
+    const loaded = await createSessionLedger(path).load()
+    assert.deepEqual(loaded.get('session-1').days.get('2026-10-19'), {
+      inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0,
+    })
+    assert.equal(loaded.get('session-1').turnCount, 3)
+    assert.equal(loaded.get('session-1').stepCount, 4)
+    assert.equal(loaded.get('session-1').generationMs, 100)
+    assert.equal(loaded.get('session-1').timedOutputTokens, 2)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a deleted session stays in the aggregate while its live peer is replaced', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  const previous = new Map([
+    ['deleted', ledgerEntry(10, 1, 1, 2)],
+    ['live', ledgerEntry(1000, 500, 99, 99)],
+  ])
+  const query = {
+    async listSessions() { return [{ header: { id: 'live' } }] },
+    async readSession() {
+      return {
+        inheritedEventCount: 0,
+        events: [
+          { type: 'turn/start', time: now, data: { turn: 1 } },
+          { type: 'step/start', time: now, data: { turn: 1, step: 1 } },
+          message(now, 1, 1, usage(20, 2)),
+        ],
+      }
+    },
+  }
+  let persisted
+  const result = await collectTokenUsage(query, {
+    days: 'all',
+    now,
+    ledgerSessions: previous,
+    persistSessions: (sessions) => { persisted = sessions },
+  })
+  assert.equal(result.allTime.totalTokens, 33)
+  assert.equal(result.activity.turns, 2)
+  assert.equal(result.activity.steps, 3)
+  assert.ok(persisted.has('deleted'))
+  assert.equal(persisted.get('live').days.get('2026-10-19').inputTokens, 20)
 })
