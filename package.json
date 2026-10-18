@@ -1,0 +1,62 @@
+{
+  "name": "llm-dsh-token-usage",
+  "version": "0.1.0",
+  "description": "DSH sidebar token usage statistics: per-day token usage for every Session in the current profile.",
+  "type": "module",
+  "license": "MIT",
+  "icon": "./icon.svg",
+  "homepage": "https://github.com/ai-v5/LLMDSHPlugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ai-v5/LLMDSHPlugin.git",
+    "directory": "plugins/token-usage"
+  },
+  "bugs": {
+    "url": "https://github.com/ai-v5/LLMDSHPlugin/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "token",
+    "usage",
+    "statistics"
+  ],
+  "engines": {
+    "node": ">=20",
+    "dsh": ">=0.2.0"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test tests/stats.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Token 用量统计",
+    "description": "统计当前 profile 下每个 Session 的每日 token 用量。"
+  }
+}
