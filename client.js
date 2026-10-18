@@ -25,7 +25,7 @@ window.__ModuleLoader__.load({
     /** Timer cadence carries a small grace so the age check does not skip a beat. */
     const AUTO_REFRESH_INTERVAL_MS = AUTO_REFRESH_MS + 60 * 1000
     /** Versioned browser cache for the last successful stats document. */
-    const CACHE_KEY = 'llm-token-usage:stats:v1'
+    const CACHE_KEY = 'llm-token-usage:stats:v2'
     let memoryCache = null
 
     /** Simplified Chinese dictionary. */
@@ -45,6 +45,7 @@ window.__ModuleLoader__.load({
       steps: '步骤',
       speed: '平均 tok/s',
       speedHint: '按模型流式输出时长统计',
+      activityMissing: '轮次、步骤等统计来自旧版 Host，完全退出并重启 DSH Desktop 后显示。',
       calendarLabel: '每日 Token 用量日历',
       less: '少',
       more: '多',
@@ -78,6 +79,7 @@ window.__ModuleLoader__.load({
       steps: 'Steps',
       speed: 'Avg tok/s',
       speedHint: 'Based on model stream time',
+      activityMissing: 'Turns, steps, and speed need a newer Host; fully quit and restart DSH Desktop.',
       calendarLabel: 'Daily token usage calendar',
       less: 'Less',
       more: 'More',
@@ -156,6 +158,15 @@ window.__ModuleLoader__.load({
       return speed >= 100 ? speed.toFixed(0) : speed.toFixed(1)
     }
 
+    /** Whether a stats document carries the activity block needed by the metrics row. */
+    function hasActivity(data) {
+      return data !== null && typeof data === 'object'
+        && data.activity !== null && typeof data.activity === 'object'
+        && typeof data.activity.turns === 'number'
+        && typeof data.activity.steps === 'number'
+        && typeof data.activity.tokensPerSecond === 'number'
+    }
+
     /** Read the last successful stats document, preferring localStorage. */
     function readStatsCache() {
       if (typeof window !== 'undefined') {
@@ -167,7 +178,8 @@ window.__ModuleLoader__.load({
               && typeof parsed.at === 'number' && Number.isFinite(parsed.at)
               && parsed.data !== null && typeof parsed.data === 'object'
               && Array.isArray(parsed.data.series)
-              && parsed.data.allTime !== null && typeof parsed.data.allTime === 'object') {
+              && parsed.data.allTime !== null && typeof parsed.data.allTime === 'object'
+              && hasActivity(parsed.data)) {
               memoryCache = { at: parsed.at, data: parsed.data }
             }
           }
@@ -175,11 +187,12 @@ window.__ModuleLoader__.load({
           // Storage can be unavailable or full; the module-level cache still works.
         }
       }
-      return memoryCache
+      return memoryCache !== null && hasActivity(memoryCache.data) ? memoryCache : null
     }
 
     /** Cache a successful stats document for the next panel open. */
     function writeStatsCache(data) {
+      if (!hasActivity(data)) return
       const entry = { at: Date.now(), data }
       memoryCache = entry
       if (typeof window === 'undefined') return
@@ -569,6 +582,9 @@ window.__ModuleLoader__.load({
               formatSpeed(activity?.tokensPerSecond)),
           ]),
         ]))
+        if (activity === null) {
+          sections.push(h('p', { key: 'activity-missing', className: 'llmtu-note' }, t.activityMissing))
+        }
         sections.push(h(Calendar, { key: 'calendar', series, todayKey, t }))
         if (!hasUsage) sections.push(h('p', { key: 'empty', className: 'llmtu-note' }, t.empty))
         if (data.seriesTruncated === true) sections.push(h('p', { key: 'truncated', className: 'llmtu-note' }, t.truncated))
