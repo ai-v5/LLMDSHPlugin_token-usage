@@ -10,6 +10,7 @@ DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **T
 - 中文界面下大数字用「万 / 百万 / 亿」显示，悬停明细同时保留精确数字。
 - 日历显示最近 365 天；顶部总量覆盖全部历史。
 - 统计全部历史的轮次、步骤和平均生成速度（tok/s）。
+- 面板打开优先使用本地缓存；自动刷新最快 1 小时一次，手动刷新立即重新扫描。
 - 只读扫描 Session 历史，不修改任何 Session 或配置；fork 继承的事件不会重复计数。
 
 ## 安装
@@ -84,14 +85,14 @@ GET /api/llm-token-usage/stats?range=all&refresh=1
 
 `activity` 为全部历史汇总：`turns`/`steps` 来自 `turn/start`/`step/start`；`tokensPerSecond = timedOutputTokens / (generationMs / 1000)`，只统计带流式时间戳的 Assistant 调用。
 
-结果缓存 60 秒；`refresh=1` 跳过缓存。
+Host 结果缓存 1 小时；`refresh=1` 跳过缓存并重新扫描。浏览器端在 `localStorage` 缓存最近一次成功结果：面板打开时优先显示缓存，缓存不足 1 小时不发请求，超过 1 小时才后台刷新；手动刷新不受此限制。
 
 ## 已知限制
 
 - AI 会话标题（session title）等辅助调用不写入 Session 日志，因此不会计入；如果部署把这些调用计费，面板总量会略低于账单。
 - 读取失败的 Session 会被跳过，面板会显示 `skippedSessions` 提示。
 - 统计是 provider 上报 usage 的汇总，不是计费账单；不同 provider 对缓存读/写的上报口径可能不同。
-- 首次打开或刷新需要扫描全部 Session 日志，Session 很多时会有短暂延迟；结果缓存 60 秒。
+- 首次打开或手动刷新需要扫描全部 Session 日志，Session 很多时会有短暂延迟；之后 1 小时内优先使用浏览器和 Host 缓存。
 
 ## 开发
 

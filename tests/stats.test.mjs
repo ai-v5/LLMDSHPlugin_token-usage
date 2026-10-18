@@ -316,3 +316,20 @@ test('fork-inherited lifecycle events are not counted as turns or steps', () => 
   assert.equal(folded.stepCount, 0)
   assert.equal(folded.generationMs, 0)
 })
+
+test('the host service keeps its default cache for one hour', async () => {
+  const { createTokenUsageService } = await import('../lib/stats.js')
+  let now = 0
+  let scans = 0
+  const service = createTokenUsageService({
+    async listSessions() { scans += 1; return [] },
+    async readSession() { return { inheritedEventCount: 0, events: [] } },
+  }, { now: () => now })
+  await service.read({ range: 30 })
+  now = 59 * 60 * 1000
+  await service.read({ range: 30 })
+  assert.equal(scans, 1)
+  now = 61 * 60 * 1000
+  await service.read({ range: 30 })
+  assert.equal(scans, 2)
+})

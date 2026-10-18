@@ -20,6 +20,13 @@ window.__ModuleLoader__.load({
     const STYLE_MARKER = 'data-llm-token-usage-style'
     /** Number of days the calendar shows, including today. */
     const CALENDAR_DAYS = 365
+    /** Cache age that makes an automatic refresh useful; never shorter than one hour. */
+    const AUTO_REFRESH_MS = 60 * 60 * 1000
+    /** Timer cadence carries a small grace so the age check does not skip a beat. */
+    const AUTO_REFRESH_INTERVAL_MS = AUTO_REFRESH_MS + 60 * 1000
+    /** Versioned browser cache for the last successful stats document. */
+    const CACHE_KEY = 'llm-token-usage:stats:v1'
+    let memoryCache = null
 
     /** Simplified Chinese dictionary. */
     const ZH = {
@@ -147,6 +154,40 @@ window.__ModuleLoader__.load({
       const speed = Number(value)
       if (!Number.isFinite(speed) || speed <= 0) return '—'
       return speed >= 100 ? speed.toFixed(0) : speed.toFixed(1)
+    }
+
+    /** Read the last successful stats document, preferring localStorage. */
+    function readStatsCache() {
+      if (typeof window !== 'undefined') {
+        try {
+          const raw = window.localStorage.getItem(CACHE_KEY)
+          if (raw !== null) {
+            const parsed = JSON.parse(raw)
+            if (parsed !== null && typeof parsed === 'object'
+              && typeof parsed.at === 'number' && Number.isFinite(parsed.at)
+              && parsed.data !== null && typeof parsed.data === 'object'
+              && Array.isArray(parsed.data.series)
+              && parsed.data.allTime !== null && typeof parsed.data.allTime === 'object') {
+              memoryCache = { at: parsed.at, data: parsed.data }
+            }
+          }
+        } catch {
+          // Storage can be unavailable or full; the module-level cache still works.
+        }
+      }
+      return memoryCache
+    }
+
+    /** Cache a successful stats document for the next panel open. */
+    function writeStatsCache(data) {
+      const entry = { at: Date.now(), data }
+      memoryCache = entry
+      if (typeof window === 'undefined') return
+      try {
+        window.localStorage.setItem(CACHE_KEY, JSON.stringify(entry))
+      } catch {
+        // Keep the in-memory copy when storage is unavailable or full.
+      }
     }
 
     /** Local calendar day key (`YYYY-MM-DD`). */
@@ -387,7 +428,7 @@ window.__ModuleLoader__.load({
       const buttonRef = React.useRef(null)
       const refreshRef = React.useRef(false)
 
-      /** Ask the next fetch for fresh host data (bypassing its 60s cache). */
+      /** Manual refresh bypasses host cache; automatic refresh never runs faster than hourly. */
       const requestRefresh = React.useCallback(() => {
         refreshRef.current = true
         setSequence(value => value + 1)
@@ -395,11 +436,23 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         if (!open) return undefined
-        const controller = new AbortController()
-        const refresh = refreshRef.current
+        const manual = refreshRef.current
         refreshRef.current = false
-        setState(previous => ({ status: 'loading', data: previous.data, error: null }))
-        const query = statsUrl(refresh)
+        const cached = readStatsCache()
+        const fresh = cached !== null && Date.now() - cached.at < AUTO_REFRESH_MS
+        if (cached !== null) {
+          setState(previous => previous.data === null
+            ? { status: 'ready', data: cached.data, error: null }
+            : previous)
+        }
+        if (cached !== null && fresh && !manual) return undefined
+        const controller = new AbortController()
+        setState(previous => ({
+          status: 'loading',
+          data: previous.data ?? cached?.data ?? null,
+          error: null,
+        }))
+        const query = statsUrl(manual)
         fetch(query, { cache: 'no-store', signal: controller.signal })
           .then((response) => {
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
@@ -407,6 +460,7 @@ window.__ModuleLoader__.load({
           })
           .then((data) => {
             if (controller.signal.aborted) return
+            writeStatsCache(data)
             setState({ status: 'ready', data, error: null })
           })
           .catch((error) => {
@@ -416,6 +470,12 @@ window.__ModuleLoader__.load({
           })
         return () => { controller.abort() }
       }, [open, sequence])
+
+      React.useEffect(() => {
+        if (!open) return undefined
+        const timer = setInterval(() => { setSequence(value => value + 1) }, AUTO_REFRESH_INTERVAL_MS)
+        return () => { clearInterval(timer) }
+      }, [open])
 
       React.useLayoutEffect(() => {
         if (!open) return undefined
