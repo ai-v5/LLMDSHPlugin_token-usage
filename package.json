@@ -5,14 +5,13 @@
   "type": "module",
   "license": "MIT",
   "icon": "./icon.svg",
-  "homepage": "https://github.com/ai-v5/LLMDSHPlugin",
+  "homepage": "https://github.com/ai-v5/LLMDSHPlugin_token-usage",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ai-v5/LLMDSHPlugin.git",
-    "directory": "plugins/token-usage"
+    "url": "https://github.com/ai-v5/LLMDSHPlugin_token-usage.git"
   },
   "bugs": {
-    "url": "https://github.com/ai-v5/LLMDSHPlugin/issues"
+    "url": "https://github.com/ai-v5/LLMDSHPlugin_token-usage/issues"
   },
   "keywords": [
     "dsh",

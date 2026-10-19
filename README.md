@@ -1,6 +1,6 @@
-# Token Usage（LLMDSHPlugin / token-usage）
+# Token Usage（LLMDSHPlugin_token-usage）
 
-DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **Token 统计**，按天汇总当前 profile 下所有 Session 的 token 用量。它是 [LLMDSHPlugin](../../README.md) 插件集合中的第一个插件。
+DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **Token 统计**，按天汇总当前 profile 下所有 Session 的 token 用量。
 
 ## 功能
 
@@ -21,19 +21,18 @@ DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **T
 从本地目录安装到 Desktop profile：
 
 ```powershell
-dsh plugin --profile desktop add D:\WORK\ai-v5\LLMDSHPlugin\plugins\token-usage
+dsh plugin --profile desktop add D:\WORK\ai-v5\LLMDSHPlugin_token-usage
 ```
 
-从 GitHub 安装时，先克隆仓库，再把插件子目录装进 profile：
+或直接从 GitHub 安装：
 
 ```powershell
-git clone https://github.com/ai-v5/LLMDSHPlugin.git
-dsh plugin --profile desktop add .\LLMDSHPlugin\plugins\token-usage
+dsh plugin --profile desktop add github:ai-v5/LLMDSHPlugin_token-usage
 ```
 
 安装后重启 DSH Desktop。插件会出现在左侧栏底部 Settings 上方（同一区域还有 Cordis 入口）。如果终端里没有 `dsh` 命令，可使用 DSH Desktop 安装目录下的 `resources\runtime\cli\bin\dsh.cmd`。
 
-> 从旧版本升级：旧版把插件放在仓库根目录；拉取新版后，请重新执行上面的 `add` 命令并指向 `plugins\token-usage`，否则 profile 里的旧链接会失效。
+> 从旧的 LLMDSHPlugin monorepo 迁移：重新执行上面的 `add` 命令指向本仓库，旧的 `plugins\token-usage` 链接会失效。
 
 卸载：
 
