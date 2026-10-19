@@ -118,15 +118,26 @@ window.__ModuleLoader__.load({
       return text.indexOf('.') === -1 ? text : text.replace(/\.?0+$/, '')
     }
 
-    /** Compact token count: Chinese 万/百万/亿, or K/M/B for English. */
+    /** Compact Chinese token count: 万 / 百万 / 千万 / 亿 / 万亿. */
+    function formatZhTokens(count) {
+      if (count < 1e4) return count.toLocaleString('zh-CN')
+      if (count < 1e6) return trimFraction((count / 1e4).toFixed(2)) + '万'
+      if (count < 1e7) {
+        if (count >= 9_995_000) return trimFraction((count / 1e7).toFixed(2)) + '千万'
+        return trimFraction((count / 1e6).toFixed(2)) + '百万'
+      }
+      if (count < 1e8) {
+        if (count >= 99_950_000) return trimFraction((count / 1e8).toFixed(2)) + '亿'
+        return trimFraction((count / 1e7).toFixed(2)) + '千万'
+      }
+      if (count < 1e12) return trimFraction((count / 1e8).toFixed(2)) + '亿'
+      return trimFraction((count / 1e12).toFixed(2)) + '万亿'
+    }
+
+    /** Compact token count: Chinese 万/百万/千万/亿/万亿, or K/M/B for English. */
     function formatTokens(value, language = detectLanguage()) {
       const count = Math.round(numberOf(value))
-      if (language === 'zh') {
-        if (count < 1e4) return count.toLocaleString('zh-CN')
-        if (count < 1e6) return trimFraction((count / 1e4).toFixed(2)) + '万'
-        if (count < 1e8) return trimFraction((count / 1e6).toFixed(2)) + '百万'
-        return trimFraction((count / 1e8).toFixed(2)) + '亿'
-      }
+      if (language === 'zh') return formatZhTokens(count)
       if (count < 1000) return String(count)
       if (count >= 1e9) return trimFraction((count / 1e9).toFixed(2)) + 'B'
       if (count >= 999950) return trimFraction((count / 1e6).toFixed(2)) + 'M'
