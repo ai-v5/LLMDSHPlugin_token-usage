@@ -15,6 +15,7 @@ DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **T
 - **不只 token**：全部历史的轮次、步骤和平均生成速度（tok/s）。
 - **删了也不丢**：Host 把每个 Session 的日汇总持久化到 `~/.dsh/token-usage-ledger.json`，Session 归档或删除后历史仍然保留。
 - **打开即用**：优先本地缓存；自动刷新最快 1 小时一次，手动刷新立即重新扫描。
+- **增量刷新**：已归档的 Session 不重复扫描，只有 live 或新增 Session 重新读取；首次扫描后手动刷新通常秒回。
 - **纯只读**：不修改任何 Session 或配置；fork 继承的事件不会重复计数。
 
 ## 关键指标
@@ -102,7 +103,8 @@ Host 结果缓存 1 小时；`refresh=1` 跳过缓存并重新扫描。浏览器
 - AI 会话标题（session title）等辅助调用不写入 Session 日志，因此不会计入；如果部署把这些调用计费，面板总量会略低于账单。
 - 读取失败的 Session 会被跳过，面板会显示 `skippedSessions` 提示。
 - 统计是 provider 上报 usage 的汇总，不是计费账单；不同 provider 对缓存读/写的上报口径可能不同。
-- 首次打开或手动刷新需要扫描全部 Session 日志，Session 很多时会有短暂延迟；之后 1 小时内优先使用浏览器和 Host 缓存。
+- 首次打开或账本升级后需要完整扫描一次全部 Session 日志；之后只重读 live 或新增 Session，手动刷新通常秒回。
+- 单个 Session 读取超过 15 秒，或整次扫描超过 45 秒，会跳过该部分并标记统计可能不完整，避免面板永久卡在刷新中。
 - 插件首次成功扫描前就已经删除的 Session 无法追溯；删除 `~/.dsh/token-usage-ledger.json` 会重置历史汇总。
 
 ## 开发

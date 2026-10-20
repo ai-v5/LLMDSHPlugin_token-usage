@@ -24,6 +24,8 @@ window.__ModuleLoader__.load({
     const AUTO_REFRESH_MS = 60 * 60 * 1000
     /** Timer cadence carries a small grace so the age check does not skip a beat. */
     const AUTO_REFRESH_INTERVAL_MS = AUTO_REFRESH_MS + 60 * 1000
+    /** A stuck Host scan must not leave the panel loading forever. */
+    const REQUEST_TIMEOUT_MS = 75_000
     /** Versioned browser cache for the last successful stats document. */
     const CACHE_KEY = 'llm-token-usage:stats:v2'
     let memoryCache = null
@@ -52,6 +54,7 @@ window.__ModuleLoader__.load({
       noUsage: '暂无用量',
       loading: '正在读取 Token 用量…',
       refreshing: '正在刷新…',
+      timeout: '读取超时，Host 可能仍在扫描；点刷新重试。',
       empty: '还没有记录到 Token 用量。',
       loadFailed: (message) => `读取 Token 用量失败：${message}`,
       retry: '重试',
@@ -86,6 +89,7 @@ window.__ModuleLoader__.load({
       noUsage: 'No usage',
       loading: 'Loading token usage…',
       refreshing: 'Refreshing…',
+      timeout: 'Timed out; the Host may still be scanning. Try Refresh again.',
       empty: 'No token usage recorded yet.',
       loadFailed: (message) => `Could not load token usage: ${message}`,
       retry: 'Retry',
@@ -471,6 +475,12 @@ window.__ModuleLoader__.load({
         }
         if (cached !== null && fresh && !manual) return undefined
         const controller = new AbortController()
+        let disposed = false
+        let timedOut = false
+        const timer = setTimeout(() => {
+          timedOut = true
+          controller.abort()
+        }, REQUEST_TIMEOUT_MS)
         setState(previous => ({
           status: 'loading',
           data: previous.data ?? cached?.data ?? null,
@@ -483,16 +493,29 @@ window.__ModuleLoader__.load({
             return response.json()
           })
           .then((data) => {
-            if (controller.signal.aborted) return
+            if (disposed) return
+            clearTimeout(timer)
+            if (timedOut) {
+              setState(previous => ({ status: 'error', data: previous.data, error: t.timeout }))
+              return
+            }
             writeStatsCache(data)
             setState({ status: 'ready', data, error: null })
           })
           .catch((error) => {
-            if (controller.signal.aborted) return
-            const message = error instanceof Error ? error.message : String(error)
+            if (disposed) return
+            clearTimeout(timer)
+            if (controller.signal.aborted && !timedOut) return
+            const message = timedOut
+              ? t.timeout
+              : error instanceof Error ? error.message : String(error)
             setState(previous => ({ status: 'error', data: previous.data, error: message }))
           })
-        return () => { controller.abort() }
+        return () => {
+          disposed = true
+          clearTimeout(timer)
+          controller.abort()
+        }
       }, [open, sequence])
 
       React.useEffect(() => {
@@ -641,7 +664,6 @@ window.__ModuleLoader__.load({
                 className: 'llmtu-icon-button',
                 'aria-label': t.refresh,
                 title: t.refresh,
-                disabled: busy,
                 onClick: requestRefresh,
               }, refreshIcon()),
               h('button', {
