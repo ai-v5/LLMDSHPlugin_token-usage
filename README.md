@@ -20,6 +20,7 @@ DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **T
 ## 关键指标
 
 - 按 provider 上报的 usage 统计，包含 `inputTokens`、`outputTokens`、`cacheReadTokens`、`cacheWriteTokens`。
+- 不区分 provider：所有在 Session 中记录 usage 的模型/后端统一汇总。
 - 中文界面下大数字用「万 / 百万 / 千万 / 亿 / 万亿」显示，悬停明细同时保留精确数字。
 - 日历显示最近 365 天；顶部总量覆盖全部历史。
 
