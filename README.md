@@ -1,18 +1,22 @@
 # Token Usage（LLMDSHPlugin_token-usage）
 
-DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **Token 统计**，按天汇总当前 profile 下所有 Session 的 token 用量。
+DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **Token 统计**。所有统计只读本机 Session 日志，不访问外部服务、不上传数据；除了历史总量和每日热力图，还能看到输入+输出、缓存读写、轮次/步骤和平均 tok/s，会话归档或删除后历史仍然保留。
 
-## 功能
+## 亮点
 
-- 左下角 footer 常驻入口，显示今日 token 总量。
-- 点击展开统计面板：第一行是**全部历史总量**，下面是 GitHub 风格的每日日历热力图；颜色深浅表示当天用量，鼠标悬停/键盘聚焦可看当天总量、输入+输出、缓存读写和会话数。
+- **仅本地**：只读本机 Session 日志，不访问外部服务、不上传任何数据。
+- **一眼看全**：左下角常驻今日用量；面板第一行是全部历史总量，下面是 365 天 GitHub 风格热力图。
+- **明细够用**：每天可看总量、输入+输出、缓存读取、缓存写入和会话数。
+- **不只 token**：全部历史的轮次、步骤和平均生成速度（tok/s）。
+- **删了也不丢**：Host 把每个 Session 的日汇总持久化到 `~/.dsh/token-usage-ledger.json`，Session 归档或删除后历史仍然保留。
+- **打开即用**：优先本地缓存；自动刷新最快 1 小时一次，手动刷新立即重新扫描。
+- **纯只读**：不修改任何 Session 或配置；fork 继承的事件不会重复计数。
+
+## 关键指标
+
 - 按 provider 上报的 usage 统计，包含 `inputTokens`、`outputTokens`、`cacheReadTokens`、`cacheWriteTokens`。
 - 中文界面下大数字用「万 / 百万 / 千万 / 亿 / 万亿」显示，悬停明细同时保留精确数字。
 - 日历显示最近 365 天；顶部总量覆盖全部历史。
-- 统计全部历史的轮次、步骤和平均生成速度（tok/s）。
-- 面板打开优先使用本地缓存；自动刷新最快 1 小时一次，手动刷新立即重新扫描。
-- Host 把每个 Session 的日汇总持久化到 `~/.dsh/token-usage-ledger.json`；Session 归档或删除后历史仍然保留。
-- 只读扫描 Session 历史，不修改任何 Session 或配置；fork 继承的事件不会重复计数。
 
 ## 安装
 

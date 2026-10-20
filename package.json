@@ -1,7 +1,7 @@
 {
   "name": "llm-dsh-token-usage",
   "version": "0.1.0",
-  "description": "DSH sidebar token usage statistics: per-day token usage for every Session in the current profile.",
+  "description": "Local-only DSH sidebar token usage: all-time totals, 365-day heatmap, input+output and cache details, turns/steps, average tok/s, and durable history.",
   "type": "module",
   "license": "MIT",
   "icon": "./icon.svg",
@@ -19,7 +19,9 @@
     "plugin",
     "token",
     "usage",
-    "statistics"
+    "statistics",
+    "local-first",
+    "token-usage"
   ],
   "engines": {
     "node": ">=20",
