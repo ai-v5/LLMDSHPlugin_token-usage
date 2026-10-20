@@ -399,3 +399,68 @@ test('a deleted session stays in the aggregate while its live peer is replaced',
   assert.ok(persisted.has('deleted'))
   assert.equal(persisted.get('live').days.get('2026-10-19').inputTokens, 20)
 })
+
+test('a stuck session read is skipped so the scan can finish', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  const query = {
+    async listSessions() {
+      return [{ header: { id: 'hung' } }, { header: { id: 'ok' } }]
+    },
+    async readSession(id) {
+      if (id === 'hung') return new Promise(() => {})
+      return { inheritedEventCount: 0, events: [message(now, 1, 1, usage(2, 1))] }
+    },
+  }
+  const result = await collectTokenUsage(query, { days: 'all', now, readTimeoutMs: 20 })
+  assert.equal(result.skippedSessions, 1)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.allTime.totalTokens, 3)
+})
+
+test('the scan prefers and disposes Session observations', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  let disposed = 0
+  let readCalls = 0
+  const query = {
+    async listSessions() { return [{ header: { id: 'observed' } }] },
+    async observeSession(_id, options) {
+      assert.equal(options.projectionMode, 'none')
+      return {
+        inheritedEventCount: 0,
+        events: [message(now, 1, 1, usage(5, 2))],
+        dispose() { disposed += 1 },
+      }
+    },
+    async readSession() {
+      readCalls += 1
+      throw new Error('readSession should not be used')
+    },
+  }
+  const result = await collectTokenUsage(query, { days: 'all', now })
+  assert.equal(result.allTime.totalTokens, 7)
+  assert.equal(disposed, 1)
+  assert.equal(readCalls, 0)
+})
+
+test('an unchanged persisted session is reused without another read', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  let reads = 0
+  const query = {
+    async listSessions() { return [{ header: { id: 'settled' }, live: false }] },
+    async observeSession() {
+      reads += 1
+      throw new Error('settled session should not be observed')
+    },
+    async readSession() {
+      reads += 1
+      throw new Error('settled session should not be read')
+    },
+  }
+  const result = await collectTokenUsage(query, {
+    days: 'all',
+    now,
+    ledgerSessions: new Map([['settled', { ...ledgerEntry(10, 1), live: false }]]),
+  })
+  assert.equal(reads, 0)
+  assert.equal(result.allTime.totalTokens, 11)
+})
