@@ -4,6 +4,16 @@ DeepSeek Harness (DSH) 插件：在桌面端/Web 端侧边栏左下角增加 **T
 
 > 仅本地 · 只读 · 不上传 · 不挑后端。
 
+## 关于“网络”能力标签
+
+插件市场会把带前端界面的插件扫出 `network` 标签。本插件的 `network` 只来自浏览器端的一次同源请求：
+
+```text
+GET /api/llm-token-usage/stats
+```
+
+目标是**本机 DSH Host 自己注册的路由**，读取本机 Session 日志；不访问任何外部域名，不上传任何数据，不含遥测、统计或授权检查。Host 端的 `fs-read` 用于读 Session 日志，`fs-write` 只写 `~/.dsh/token-usage-ledger.json` 这一个文件。
+
 ## 亮点
 
 - **仅本地，安全**：只读本机 Session 日志，不访问外部服务、不上传任何数据，也不修改 Session 或配置。
@@ -39,6 +49,12 @@ dsh plugin --profile desktop add D:\WORK\ai-v5\LLMDSHPlugin_token-usage
 
 ```powershell
 dsh plugin --profile desktop add github:ai-v5/LLMDSHPlugin_token-usage
+```
+
+从 npm 安装：
+
+```powershell
+dsh plugin --profile desktop add llm-dsh-token-usage
 ```
 
 安装后重启 DSH Desktop。插件会出现在左侧栏底部 Settings 上方（同一区域还有 Cordis 入口）。如果终端里没有 `dsh` 命令，可使用 DSH Desktop 安装目录下的 `resources\runtime\cli\bin\dsh.cmd`。
