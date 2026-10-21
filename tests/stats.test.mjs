@@ -367,6 +367,43 @@ test('the Session ledger round-trips its durable shape', async () => {
   }
 })
 
+test('two Hosts sharing one ledger keep each other entries', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  try {
+    const path = join(directory, 'ledger.json')
+    const first = createSessionLedger(path)
+    const second = createSessionLedger(path)
+    await first.load()
+    await second.load()
+    await first.save(new Map([['a', { ...ledgerEntry(1, 1), updatedAt: 1_000 }]]))
+    await second.save(new Map([['b', { ...ledgerEntry(2, 2), updatedAt: 2_000 }]]))
+    const merged = await createSessionLedger(path).load()
+    assert.equal(merged.size, 2)
+    assert.ok(merged.has('a'))
+    assert.ok(merged.has('b'))
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a newer on-disk entry survives a stale save', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  try {
+    const path = join(directory, 'ledger.json')
+    const stale = createSessionLedger(path)
+    await stale.load()
+    const writer = createSessionLedger(path)
+    await writer.load()
+    await writer.save(new Map([['s', { ...ledgerEntry(900, 5), updatedAt: 9_000 }]]))
+    await stale.save(new Map([['s', { ...ledgerEntry(1, 1), updatedAt: 100 }]]))
+    const final = await createSessionLedger(path).load()
+    assert.equal(final.get('s').days.get('2026-10-19').inputTokens, 900)
+    assert.equal(final.get('s').updatedAt, 9_000)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('a deleted session stays in the aggregate while its live peer is replaced', async () => {
   const now = new Date(2026, 9, 19, 1).getTime()
   const previous = new Map([
