@@ -1,5 +1,6 @@
 /** Host half: expose per-day token usage from the Session corpus. */
 import { createSessionLedger } from './lib/ledger.js'
+import { readSessionStamps } from './lib/scan-index.js'
 import { createTokenUsageService, normalizeRange } from './lib/stats.js'
 
 export const name = 'llm-token-usage'
@@ -12,6 +13,7 @@ export function apply(ctx) {
   const ledger = createLedger(ctx)
   const service = createTokenUsageService(ctx.sessionQuery, {
     ...(ledger === undefined ? {} : { ledger }),
+    sessionStamps: createStampsReader(ctx),
     logger: ctx.logger,
   })
   ctx.effect(() => {
@@ -21,7 +23,10 @@ export function apply(ctx) {
       requestBody: 'buffered',
       fetch: (request) => handle(ctx, service, request),
     })
-    return () => { void dispose() }
+    return () => {
+      void dispose()
+      service.dispose()
+    }
   }, 'llm-token-usage: stats route')
 }
 
@@ -30,6 +35,17 @@ function createLedger(ctx) {
   return typeof ctx.dshHomePath === 'function'
     ? createSessionLedger(ctx.dshHomePath('token-usage-ledger.json'))
     : undefined
+}
+
+/**
+ * Stat the stored Session logs so a scan can skip the ones that did not change.
+ * The Host owns that layout; when it is unknown the reader yields `undefined`
+ * and the service falls back to re-reading on liveness alone.
+ */
+function createStampsReader(ctx) {
+  if (typeof ctx.dshHomePath !== 'function') return undefined
+  const root = ctx.dshHomePath('sessions')
+  return () => readSessionStamps(root)
 }
 
 async function handle(ctx, service, request) {

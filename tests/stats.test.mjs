@@ -1,12 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   EMPTY_BUCKETS, foldSessionEvents, buildStats, localDay, usageOfEvent, streamDurationMs, collectTokenUsage,
+  planSessionReads,
 } from '../lib/stats.js'
 import { createSessionLedger } from '../lib/ledger.js'
+import { readSessionStamps } from '../lib/scan-index.js'
 
 const usage = (input, output, cacheRead = 0, cacheWrite = 0) => ({
   inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite,
@@ -321,7 +323,7 @@ test('fork-inherited lifecycle events are not counted as turns or steps', () => 
   assert.equal(folded.generationMs, 0)
 })
 
-test('the host service keeps its default cache for one hour', async () => {
+test('the host service keeps its default cache for fifteen minutes', async () => {
   const { createTokenUsageService } = await import('../lib/stats.js')
   let now = 0
   let scans = 0
@@ -330,10 +332,10 @@ test('the host service keeps its default cache for one hour', async () => {
     async readSession() { return { inheritedEventCount: 0, events: [] } },
   }, { now: () => now })
   await service.read({ range: 30 })
-  now = 59 * 60 * 1000
+  now = 14 * 60 * 1000
   await service.read({ range: 30 })
   assert.equal(scans, 1)
-  now = 61 * 60 * 1000
+  now = 16 * 60 * 1000
   await service.read({ range: 30 })
   assert.equal(scans, 2)
 })
@@ -500,4 +502,225 @@ test('an unchanged persisted session is reused without another read', async () =
   })
   assert.equal(reads, 0)
   assert.equal(result.allTime.totalTokens, 11)
+})
+
+test('a non-live session whose log changed is read again and recounted', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  const reads = []
+  const query = {
+    async listSessions() {
+      return [
+        { header: { id: 'settled', createdAt: 2 }, live: false },
+        { header: { id: 'rewritten', createdAt: 1 }, live: false },
+      ]
+    },
+    async readSession(id) {
+      reads.push(id)
+      return { inheritedEventCount: 0, events: [message(now, 1, 1, usage(400, 100))] }
+    },
+  }
+  const previous = new Map([
+    ['settled', { ...ledgerEntry(10, 1), live: false, updatedAt: now, size: 100, mtimeMs: 1_000 }],
+    ['rewritten', { ...ledgerEntry(10, 1), live: false, updatedAt: now, size: 100, mtimeMs: 1_000 }],
+  ])
+  const stamps = new Map([
+    ['settled', { size: 100, mtimeMs: 1_000 }],
+    ['rewritten', { size: 140, mtimeMs: 2_000 }],
+  ])
+  const result = await collectTokenUsage(query, {
+    days: 'all', now, ledgerSessions: previous, sessionStamps: stamps,
+  })
+  assert.deepEqual(reads, ['rewritten'])
+  assert.equal(result.allTime.totalTokens, 11 + 500)
+})
+
+test('a ledger entry from before stamps is adopted when its log predates the snapshot', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  let reads = 0
+  const query = {
+    async listSessions() { return [{ header: { id: 'legacy' }, live: false }] },
+    async readSession() {
+      reads += 1
+      throw new Error('legacy entry should be adopted, not read')
+    },
+  }
+  let persisted
+  const result = await collectTokenUsage(query, {
+    days: 'all',
+    now,
+    ledgerSessions: new Map([['legacy', { ...ledgerEntry(10, 1), live: false, updatedAt: 5_000 }]]),
+    sessionStamps: new Map([['legacy', { size: 42, mtimeMs: 4_000 }]]),
+    persistSessions: (sessions) => { persisted = sessions },
+  })
+  assert.equal(reads, 0)
+  assert.equal(result.allTime.totalTokens, 11)
+  assert.equal(persisted.get('legacy').size, 42)
+  assert.equal(persisted.get('legacy').mtimeMs, 4_000)
+})
+
+test('a ledger entry from before stamps is read when its log moved after the snapshot', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  const reads = []
+  const query = {
+    async listSessions() { return [{ header: { id: 'legacy' }, live: false }] },
+    async readSession(id) {
+      reads.push(id)
+      return { inheritedEventCount: 0, events: [message(now, 1, 1, usage(70, 9))] }
+    },
+  }
+  const result = await collectTokenUsage(query, {
+    days: 'all',
+    now,
+    ledgerSessions: new Map([['legacy', { ...ledgerEntry(10, 1), live: false, updatedAt: 5_000 }]]),
+    sessionStamps: new Map([['legacy', { size: 99, mtimeMs: 6_000 }]]),
+  })
+  assert.deepEqual(reads, ['legacy'])
+  assert.equal(result.allTime.totalTokens, 79)
+})
+
+test('the read plan refreshes the most recently written session first', () => {
+  const records = [
+    { header: { id: 'createdLate', createdAt: 900 }, live: false },
+    { header: { id: 'writtenLate', createdAt: 100 }, live: false },
+  ]
+  const stamps = new Map([
+    ['createdLate', { size: 10, mtimeMs: 1_000 }],
+    ['writtenLate', { size: 10, mtimeMs: 9_000 }],
+  ])
+  const { pending } = planSessionReads(records, new Map(), stamps)
+  assert.deepEqual(pending.map(item => item.sessionId), ['writtenLate', 'createdLate'])
+})
+
+test('without stamps the read plan keeps the newest sessions first', () => {
+  const records = [
+    { header: { id: 'older', createdAt: 100 }, live: false },
+    { header: { id: 'newer', createdAt: 900 }, live: false },
+  ]
+  const { pending } = planSessionReads(records, new Map(), undefined)
+  assert.deepEqual(pending.map(item => item.sessionId), ['newer', 'older'])
+})
+
+test('the Session ledger keeps change stamps and still opens a version 1 file', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  try {
+    const path = join(directory, 'ledger.json')
+    const ledger = createSessionLedger(path)
+    await ledger.save(new Map([['session-1', {
+      ...ledgerEntry(10, 2), updatedAt: 5_000, size: 128, mtimeMs: 4_000,
+    }]]))
+    const loaded = await createSessionLedger(path).load()
+    assert.equal(loaded.get('session-1').size, 128)
+    assert.equal(loaded.get('session-1').mtimeMs, 4_000)
+    await writeFile(path, JSON.stringify({
+      version: 1,
+      sessions: {
+        legacy: {
+          days: {}, turnCount: 0, stepCount: 0, generationMs: 0, timedOutputTokens: 0, live: false, updatedAt: 7,
+        },
+      },
+    }), 'utf8')
+    const legacy = await createSessionLedger(path).load()
+    assert.ok(legacy.has('legacy'))
+    assert.equal(legacy.get('legacy').updatedAt, 7)
+    assert.equal(legacy.get('legacy').size, undefined)
+    assert.equal(legacy.get('legacy').mtimeMs, undefined)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('readSessionStamps reports the newest artifact of every stored session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  try {
+    const project = join(directory, '--work--')
+    const session = join(project, 'session-a')
+    await mkdir(session, { recursive: true })
+    const log = join(session, 'session.v4.jsonl.zstd')
+    await writeFile(log, 'x'.repeat(10))
+    await utimes(log, new Date(1_000_000), new Date(1_000_000))
+    const stamps = await readSessionStamps(directory)
+    assert.equal(stamps.size, 1)
+    assert.deepEqual(stamps.get('session-a'), { size: 10, mtimeMs: new Date(1_000_000).getTime() })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('readSessionStamps stays out of the way when no session log is there', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  try {
+    await writeFile(join(directory, 'notes.txt'), 'x')
+    assert.equal(await readSessionStamps(directory), undefined)
+    assert.equal(await readSessionStamps(join(directory, 'missing')), undefined)
+    assert.equal(await readSessionStamps(''), undefined)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a scan that runs out of budget reports the sessions still waiting', async () => {
+  const records = Array.from({ length: 5 }, (_, index) => ({
+    header: { id: `s${index}`, createdAt: 5 - index }, live: false,
+  }))
+  const query = {
+    async listSessions() { return records },
+    async readSession() {
+      await new Promise((resolve) => { setTimeout(resolve, 20) })
+      return { inheritedEventCount: 0, events: [] }
+    },
+  }
+  const result = await collectTokenUsage(query, { days: 'all', scanTimeoutMs: 40, readTimeoutMs: 1_000 })
+  assert.ok(result.pendingSessions >= 1)
+  assert.equal(result.incomplete, true)
+})
+
+test('a truncated scan keeps draining its backlog in the background', async () => {
+  const { createTokenUsageService } = await import('../lib/stats.js')
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  const records = Array.from({ length: 6 }, (_, index) => ({
+    header: { id: `s${index}`, createdAt: 6 - index }, live: false,
+  }))
+  let scans = 0
+  const query = {
+    async listSessions() { scans += 1; return records },
+    async readSession() {
+      await new Promise((resolve) => { setTimeout(resolve, 20) })
+      return { inheritedEventCount: 0, events: [] }
+    },
+  }
+  const service = createTokenUsageService(query, {
+    ledger: createSessionLedger(join(directory, 'ledger.json')),
+    scanTimeoutMs: 30,
+    catchUpDelayMs: 0,
+    catchUpPasses: 6,
+  })
+  try {
+    const first = await service.read({ range: 'all' })
+    assert.ok(first.pendingSessions >= 1)
+    await new Promise((resolve) => { setTimeout(resolve, 600) })
+    assert.ok(scans >= 3, `expected background scans, saw ${scans}`)
+    const settled = await service.read({ range: 'all' })
+    assert.equal(settled.pendingSessions, 0)
+    assert.equal(settled.cached, true)
+  } finally {
+    service.dispose()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a complete scan schedules no background pass', async () => {
+  const { createTokenUsageService } = await import('../lib/stats.js')
+  let scans = 0
+  const query = {
+    async listSessions() { scans += 1; return [] },
+    async readSession() { return { inheritedEventCount: 0, events: [] } },
+  }
+  const service = createTokenUsageService(query, { catchUpDelayMs: 0 })
+  try {
+    await service.read({ range: 'all' })
+    await new Promise((resolve) => { setTimeout(resolve, 100) })
+    assert.equal(scans, 1)
+  } finally {
+    service.dispose()
+  }
 })

@@ -20,8 +20,8 @@ window.__ModuleLoader__.load({
     const STYLE_MARKER = 'data-llm-token-usage-style'
     /** Number of days the calendar shows, including today. */
     const CALENDAR_DAYS = 365
-    /** Cache age that makes an automatic refresh useful; never shorter than one hour. */
-    const AUTO_REFRESH_MS = 60 * 60 * 1000
+    /** Cache age that makes an automatic refresh useful; the Host rescans only changed Sessions. */
+    const AUTO_REFRESH_MS = 20 * 60 * 1000
     /** Timer cadence carries a small grace so the age check does not skip a beat. */
     const AUTO_REFRESH_INTERVAL_MS = AUTO_REFRESH_MS + 60 * 1000
     /** A stuck Host scan must not leave the panel loading forever. */
@@ -59,6 +59,7 @@ window.__ModuleLoader__.load({
       loadFailed: (message) => `读取 Token 用量失败：${message}`,
       retry: '重试',
       incomplete: (count) => `${count} 个会话读取失败，统计可能不完整。`,
+      pending: (count) => `还有 ${count} 个会话等待扫描，下次刷新继续。`,
       truncated: '日历显示最近 365 天，顶部总量为全部历史。',
       tokens: 'tokens',
       monthNames: ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'],
@@ -94,6 +95,7 @@ window.__ModuleLoader__.load({
       loadFailed: (message) => `Could not load token usage: ${message}`,
       retry: 'Retry',
       incomplete: (count) => `${count} session(s) could not be read; totals may be incomplete.`,
+      pending: (count) => `${count} session(s) still waiting to be scanned; the next refresh continues.`,
       truncated: 'The calendar shows the most recent 365 days; the headline covers all history.',
       tokens: 'tokens',
       monthNames: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
@@ -571,6 +573,7 @@ window.__ModuleLoader__.load({
       const activeDays = series.reduce((count, day) => count + (numberOf(day.totalTokens) > 0 ? 1 : 0), 0)
       const hasUsage = all !== null && numberOf(all.totalTokens) > 0
       const skipped = data !== null ? numberOf(data.skippedSessions) : 0
+      const pending = data !== null ? numberOf(data.pendingSessions) : 0
       const busy = state.status === 'loading' || state.status === 'idle'
       const activity = data !== null && data.activity !== null && data.activity !== undefined
         && typeof data.activity === 'object' ? data.activity : null
@@ -622,9 +625,8 @@ window.__ModuleLoader__.load({
         sections.push(h(Calendar, { key: 'calendar', series, todayKey, t }))
         if (!hasUsage) sections.push(h('p', { key: 'empty', className: 'llmtu-note' }, t.empty))
         if (data.seriesTruncated === true) sections.push(h('p', { key: 'truncated', className: 'llmtu-note' }, t.truncated))
-        if (skipped > 0 || data.incomplete === true) {
-          sections.push(h('p', { key: 'incomplete', className: 'llmtu-note' }, t.incomplete(skipped)))
-        }
+        if (skipped > 0) sections.push(h('p', { key: 'incomplete', className: 'llmtu-note' }, t.incomplete(skipped)))
+        if (pending > 0) sections.push(h('p', { key: 'pending', className: 'llmtu-note' }, t.pending(pending)))
       }
       if (busy && data !== null) sections.push(h('p', { key: 'refreshing', className: 'llmtu-note' }, t.refreshing))
 
