@@ -659,8 +659,8 @@ test('readSessionStamps stays out of the way when no session log is there', asyn
 })
 
 test('a scan that runs out of budget reports the sessions still waiting', async () => {
-  const records = Array.from({ length: 5 }, (_, index) => ({
-    header: { id: `s${index}`, createdAt: 5 - index }, live: false,
+  const records = Array.from({ length: 40 }, (_, index) => ({
+    header: { id: `s${index}`, createdAt: 40 - index }, live: false,
   }))
   const query = {
     async listSessions() { return records },
@@ -677,8 +677,8 @@ test('a scan that runs out of budget reports the sessions still waiting', async 
 test('a truncated scan keeps draining its backlog in the background', async () => {
   const { createTokenUsageService } = await import('../lib/stats.js')
   const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
-  const records = Array.from({ length: 6 }, (_, index) => ({
-    header: { id: `s${index}`, createdAt: 6 - index }, live: false,
+  const records = Array.from({ length: 30 }, (_, index) => ({
+    header: { id: `s${index}`, createdAt: 30 - index }, live: false,
   }))
   let scans = 0
   const query = {
@@ -722,5 +722,99 @@ test('a complete scan schedules no background pass', async () => {
     assert.equal(scans, 1)
   } finally {
     service.dispose()
+  }
+})
+
+test('one scan overlaps a small pool of Session reads', async () => {
+  const records = Array.from({ length: 12 }, (_, index) => ({
+    header: { id: `s${index}`, createdAt: 12 - index }, live: false,
+  }))
+  let active = 0
+  let peak = 0
+  const query = {
+    async listSessions() { return records },
+    async readSession() {
+      active += 1
+      peak = Math.max(peak, active)
+      await new Promise((resolve) => { setTimeout(resolve, 10) })
+      active -= 1
+      return { inheritedEventCount: 0, events: [] }
+    },
+  }
+  const result = await collectTokenUsage(query, { days: 'all', readTimeoutMs: 1_000 })
+  assert.equal(result.pendingSessions, 0)
+  assert.equal(result.sessionCount, 12)
+  assert.ok(peak > 1, `expected overlapping reads, saw ${peak}`)
+  assert.ok(peak <= 4, `expected the read pool to stay bounded, saw ${peak}`)
+})
+
+test('a failed background pass retries instead of ending the drain', async () => {
+  const { createTokenUsageService } = await import('../lib/stats.js')
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  const records = Array.from({ length: 24 }, (_, index) => ({
+    header: { id: `s${index}`, createdAt: 24 - index }, live: false,
+  }))
+  let scans = 0
+  const query = {
+    async listSessions() {
+      scans += 1
+      if (scans === 2) throw new Error('listing failed once')
+      return records
+    },
+    async readSession() {
+      await new Promise((resolve) => { setTimeout(resolve, 10) })
+      return { inheritedEventCount: 0, events: [] }
+    },
+  }
+  const service = createTokenUsageService(query, {
+    ledger: createSessionLedger(join(directory, 'ledger.json')),
+    scanTimeoutMs: 30,
+    catchUpDelayMs: 0,
+    catchUpPasses: 8,
+  })
+  try {
+    const first = await service.read({ range: 'all' })
+    assert.ok(first.pendingSessions >= 1)
+    await new Promise((resolve) => { setTimeout(resolve, 800) })
+    assert.ok(scans >= 4, `expected the drain to keep scanning, saw ${scans}`)
+    const settled = await service.read({ range: 'all' })
+    assert.equal(settled.pendingSessions, 0)
+  } finally {
+    service.dispose()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a reader that walks away does not throw away the scan it started', async () => {
+  const { createTokenUsageService } = await import('../lib/stats.js')
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  const records = Array.from({ length: 20 }, (_, index) => ({
+    header: { id: `s${index}`, createdAt: 20 - index }, live: false,
+  }))
+  const query = {
+    async listSessions() { return records },
+    async readSession() {
+      await new Promise((resolve) => { setTimeout(resolve, 10) })
+      return { inheritedEventCount: 0, events: [] }
+    },
+  }
+  const service = createTokenUsageService(query, {
+    ledger: createSessionLedger(join(directory, 'ledger.json')),
+    scanTimeoutMs: 25,
+    catchUpDelayMs: 0,
+    catchUpPasses: 8,
+  })
+  try {
+    const controller = new AbortController()
+    const first = service.read({ range: 'all', signal: controller.signal })
+    controller.abort(new Error('panel closed'))
+    await assert.rejects(first)
+    await new Promise((resolve) => { setTimeout(resolve, 600) })
+    const settled = await service.read({ range: 'all' })
+    assert.equal(settled.pendingSessions, 0)
+    assert.equal(settled.cached, true)
+  } finally {
+    service.dispose()
+    await rm(directory, { recursive: true, force: true })
   }
 })
