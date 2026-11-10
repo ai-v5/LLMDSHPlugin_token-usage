@@ -26,7 +26,7 @@ GET /api/llm-token-usage/stats
 - **删了也不丢**：Host 把每个 Session 的日汇总持久化到 `~/.dsh/token-usage-ledger.json`，Session 归档或删除后历史仍然保留。
 - **打开即用**：优先本地缓存；自动刷新 20 分钟一次，手动刷新立即重新扫描。
 - **增量刷新**：按 Session 日志的文件大小和修改时间判断变化，只重读变化或新增的 Session；包括其他 DSH 宿主写入的会话。
-- **自动补齐**：一次扫描读不完时，按日志修改时间排序先读正在使用的会话，剩下的会话在后台接着扫，下次刷新即完整。
+- **自动补齐**：一次扫描读不完时，按日志修改时间排序先读正在使用的会话，剩下的会话由后台连续扫描补齐（每轮 2 秒间隔、最多 40 轮），不需要反复刷新。
 - **纯只读**：不修改任何 Session 或配置；fork 继承的事件不会重复计数。
 
 ## 关键指标
@@ -113,16 +113,16 @@ GET /api/llm-token-usage/stats?range=all&refresh=1
 }
 ```
 
-`activity` 为全部历史汇总：`turns`/`steps` 来自 `turn/start`/`step/start`；`tokensPerSecond = timedOutputTokens / (generationMs / 1000)`，只统计带流式时间戳的 Assistant 调用。`skippedSessions` 是读取失败的会话数，`pendingSessions` 是这次扫描超时后还没轮到的会话数（下次刷新继续）。
+`activity` 为全部历史汇总：`turns`/`steps` 来自 `turn/start`/`step/start`；`tokensPerSecond = timedOutputTokens / (generationMs / 1000)`，只统计带流式时间戳的 Assistant 调用。`skippedSessions` 是读取失败的会话数，`pendingSessions` 是这次扫描超时后还没轮到的会话数（后台会接着补，不需要守着刷新）。
 
 Host 结果缓存 15 分钟；`refresh=1` 跳过缓存并重新扫描。浏览器端在 `localStorage` 缓存最近一次成功结果：面板打开时优先显示缓存，缓存不足 20 分钟不发请求，超过 20 分钟才后台刷新；手动刷新不受此限制。
 
-扫描因 45 秒预算被截断时，Host 会在后台继续跑后续几轮（每轮之间留 2 秒），最多连跑 20 轮后停下，等下一次请求再接着扫；期间读到的还是上一轮完整结果。
+扫描因 45 秒预算被截断时，Host 会在后台连续跑后续几轮（每轮之间留 2 秒，一次刷新最多 40 轮，某一轮没有减少就停下等下一次请求），任何一轮失败会记日志并重试，不会静默中断；扫描本身不随浏览器请求取消，关掉面板也会把这一轮读完。每轮最多同时读 4 个会话，所以同一个预算能推进的会话数约为串行时的 4 倍。期间读到的还是上一轮完整结果。
 
 ## 已知限制
 
 - AI 会话标题（session title）等辅助调用不写入 Session 日志，因此不会计入；如果部署把这些调用计费，面板总量会略低于账单。
-- 读取失败的 Session 会被跳过，面板会显示 `skippedSessions` 提示；扫描超时剩下的会话显示 `pendingSessions` 数量，下次刷新接着扫。
+- 读取失败的 Session 会被跳过，面板会显示 `skippedSessions` 提示；扫描超时剩下的会话显示 `pendingSessions` 数量，后台补齐完成后下次刷新即归零。
 - 统计是 provider 上报 usage 的汇总，不是计费账单；不同 provider 对缓存读/写的上报口径可能不同。
 - 会话很多、日志很大时，一次扫描（45 秒预算）可能读不完所有变化的 Session；队列按日志修改时间排序，正在使用的会话优先，历史会话在后续刷新中补齐。
 - 单个 Session 读取超过 15 秒，或整次扫描超过 45 秒，会跳过该部分并标记统计可能不完整，避免面板永久卡在刷新中。
