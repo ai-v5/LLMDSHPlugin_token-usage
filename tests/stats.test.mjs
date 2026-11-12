@@ -578,26 +578,73 @@ test('a ledger entry from before stamps is read when its log moved after the sna
   assert.equal(result.allTime.totalTokens, 79)
 })
 
-test('the read plan refreshes the most recently written session first', () => {
+test('the read plan refreshes recent Sessions newest first', () => {
+  const now = 1_000_000
   const records = [
     { header: { id: 'createdLate', createdAt: 900 }, live: false },
     { header: { id: 'writtenLate', createdAt: 100 }, live: false },
   ]
   const stamps = new Map([
-    ['createdLate', { size: 10, mtimeMs: 1_000 }],
-    ['writtenLate', { size: 10, mtimeMs: 9_000 }],
+    ['createdLate', { size: 10, mtimeMs: now - 60_000 }],
+    ['writtenLate', { size: 10, mtimeMs: now - 30_000 }],
   ])
-  const { pending } = planSessionReads(records, new Map(), stamps)
+  const { pending } = planSessionReads(records, new Map(), stamps, { now })
   assert.deepEqual(pending.map(item => item.sessionId), ['writtenLate', 'createdLate'])
 })
 
-test('without stamps the read plan keeps the newest sessions first', () => {
+test('the read plan drains settled Sessions oldest first so none is starved', () => {
+  const now = 10_000_000
   const records = [
-    { header: { id: 'older', createdAt: 100 }, live: false },
+    { header: { id: 'newest', createdAt: 3 }, live: false },
+    { header: { id: 'oldest', createdAt: 1 }, live: false },
+    { header: { id: 'middle', createdAt: 2 }, live: false },
+  ]
+  const stamps = new Map([
+    ['newest', { size: 10, mtimeMs: now - 3_600_000 }],
+    ['oldest', { size: 10, mtimeMs: now - 6 * 3_600_000 }],
+    ['middle', { size: 10, mtimeMs: now - 2 * 3_600_000 }],
+  ])
+  const { pending } = planSessionReads(records, new Map(), stamps, { now })
+  assert.deepEqual(pending.map(item => item.sessionId), ['oldest', 'middle', 'newest'])
+})
+
+test('a live Session is read before any backlog, however old its log looks', () => {
+  const now = 10_000_000
+  const records = [
+    { header: { id: 'settled', createdAt: 1 }, live: false },
+    { header: { id: 'running', createdAt: 2 }, live: true },
+  ]
+  const stamps = new Map([
+    ['settled', { size: 10, mtimeMs: now - 6 * 3_600_000 }],
+    ['running', { size: 10, mtimeMs: now - 60_000 }],
+  ])
+  const { pending } = planSessionReads(records, new Map(), stamps, { now })
+  assert.deepEqual(pending.map(item => item.sessionId), ['running', 'settled'])
+})
+
+test('a deferred Session is left out of the read plan', () => {
+  const now = 10_000_000
+  const records = [
+    { header: { id: 'poison' }, live: false },
+    { header: { id: 'fine' }, live: false },
+  ]
+  const stamps = new Map([
+    ['poison', { size: 10, mtimeMs: now - 60_000 }],
+    ['fine', { size: 10, mtimeMs: now - 30_000 }],
+  ])
+  const { pending } = planSessionReads(records, new Map(), stamps, {
+    now, deferred: new Set(['poison']),
+  })
+  assert.deepEqual(pending.map(item => item.sessionId), ['fine'])
+})
+
+test('without stamps the read plan falls back to creation time order', () => {
+  const records = [
+    { header: { id: 'older', createdAt: 300 }, live: false },
     { header: { id: 'newer', createdAt: 900 }, live: false },
   ]
-  const { pending } = planSessionReads(records, new Map(), undefined)
-  assert.deepEqual(pending.map(item => item.sessionId), ['newer', 'older'])
+  const { pending } = planSessionReads(records, new Map(), undefined, { now: 10_000_000 })
+  assert.deepEqual(pending.map(item => item.sessionId), ['older', 'newer'])
 })
 
 test('the Session ledger keeps change stamps and still opens a version 1 file', async () => {
@@ -817,4 +864,151 @@ test('a reader that walks away does not throw away the scan it started', async (
     service.dispose()
     await rm(directory, { recursive: true, force: true })
   }
+})
+
+test('recently written Sessions are read before the settled backlog', () => {
+  const now = 10_000_000
+  const records = [
+    { header: { id: 'settled', createdAt: 1 }, live: false },
+    { header: { id: 'recent', createdAt: 2 }, live: false },
+  ]
+  const stamps = new Map([
+    ['settled', { size: 10, mtimeMs: now - 2 * 3_600_000 }],
+    ['recent', { size: 10, mtimeMs: now - 60_000 }],
+  ])
+  const { pending } = planSessionReads(records, new Map(), stamps, { now })
+  assert.deepEqual(pending.map(item => item.sessionId), ['recent', 'settled'])
+})
+
+test('a stream of new Sessions does not stall the backlog drain', async () => {
+  const { createTokenUsageService } = await import('../lib/stats.js')
+  const directory = await mkdtemp(join(tmpdir(), 'llm-token-usage-'))
+  const now = 1_000_000_000
+  const records = Array.from({ length: 24 }, (_, index) => ({
+    header: { id: `settled${index}`, createdAt: now - 3_600_000 - index }, live: false,
+  }))
+  const reads = []
+  let scans = 0
+  const query = {
+    async listSessions() {
+      scans += 1
+      // A fresh Session keeps arriving, so the queue only clears if the drain runs.
+      records.push({ header: { id: `arrival${scans}`, createdAt: now + scans }, live: false })
+      return [...records]
+    },
+    async readSession(id) {
+      reads.push(id)
+      await new Promise((resolve) => { setTimeout(resolve, 10) })
+      return { inheritedEventCount: 0, events: [] }
+    },
+  }
+  const service = createTokenUsageService(query, {
+    ledger: createSessionLedger(join(directory, 'ledger.json')),
+    now: () => now,
+    scanTimeoutMs: 25,
+    catchUpDelayMs: 0,
+    catchUpPasses: 10,
+  })
+  try {
+    await service.read({ range: 'all' })
+    await new Promise((resolve) => { setTimeout(resolve, 900) })
+    assert.ok(scans > 2, `expected the drain to keep scanning, saw ${scans}`)
+    const settledRead = new Set(reads.filter(id => id.startsWith('settled')))
+    assert.equal(settledRead.size, 24, `expected every settled Session to be read, saw ${settledRead.size}`)
+    const settled = await service.read({ range: 'all', refresh: true })
+    assert.equal(settled.pendingSessions, 0)
+  } finally {
+    service.dispose()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('a Session that keeps failing is deferred instead of blocking the queue', async () => {
+  const { createTokenUsageService } = await import('../lib/stats.js')
+  const now = 1_000_000_000
+  const records = [
+    { header: { id: 'poison', createdAt: now - 4_000 }, live: false },
+    ...Array.from({ length: 4 }, (_, index) => ({
+      header: { id: `fine${index}`, createdAt: now - 3_000 + index }, live: false,
+    })),
+  ]
+  const attempts = new Map()
+  const query = {
+    async listSessions() { return records },
+    async readSession(id) {
+      attempts.set(id, (attempts.get(id) ?? 0) + 1)
+      if (id === 'poison') throw new Error('unreadable')
+      return { inheritedEventCount: 0, events: [] }
+    },
+  }
+  const service = createTokenUsageService(query, {
+    now: () => now, catchUpDelayMs: 0, catchUpPasses: 3, scanTimeoutMs: 1_000,
+  })
+  try {
+    await service.read({ range: 'all' })
+    await new Promise((resolve) => { setTimeout(resolve, 200) })
+    assert.equal(attempts.get('poison'), 1, 'the failing Session is retried on every pass')
+    for (let index = 0; index < 4; index += 1) assert.equal(attempts.get(`fine${index}`), 1)
+  } finally {
+    service.dispose()
+  }
+})
+
+test('staleSessions reports retained numbers whose log moved on', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  const previous = new Map([
+    ['frozen', { ...ledgerEntry(10, 1), live: false, updatedAt: now - 60_000, size: 100, mtimeMs: 1_000 }],
+    ['fresh', { ...ledgerEntry(10, 1), live: false, updatedAt: now - 60_000, size: 100, mtimeMs: 1_000 }],
+  ])
+  const stamps = new Map([
+    ['frozen', { size: 400, mtimeMs: 9_000 }],
+    ['fresh', { size: 100, mtimeMs: 1_000 }],
+  ])
+  const query = {
+    async listSessions() {
+      return [{ header: { id: 'frozen' }, live: false }, { header: { id: 'fresh' }, live: false }]
+    },
+    async readSession() { throw new Error('deferred Session should not be read') },
+  }
+  const result = await collectTokenUsage(query, {
+    days: 'all', now, ledgerSessions: previous, sessionStamps: stamps,
+    deferred: new Set(['frozen']),
+  })
+  assert.equal(result.staleSessions, 1)
+  assert.equal(result.pendingSessions, 0)
+})
+
+test('the read budget grows with the stored log size', async () => {
+  const { readTimeoutFor } = await import('../lib/stats.js')
+  assert.equal(readTimeoutFor({}, 15_000, 500, 60_000), 15_000)
+  assert.equal(readTimeoutFor({ stamp: { size: 0 } }, 15_000, 500, 60_000), 15_000)
+  assert.equal(readTimeoutFor({ stamp: { size: 2e6 } }, 15_000, 500, 60_000), 16_000)
+  assert.equal(readTimeoutFor({ stamp: { size: 1e9 } }, 15_000, 500, 60_000), 60_000)
+})
+
+test('a large log gets the extra read time a small one does not', async () => {
+  const now = new Date(2026, 9, 19, 1).getTime()
+  const delay = 30
+  const query = {
+    async listSessions() {
+      return [
+        { header: { id: 'large' }, live: false },
+        { header: { id: 'small' }, live: false },
+      ]
+    },
+    async readSession() {
+      await new Promise((resolve) => { setTimeout(resolve, delay) })
+      return { inheritedEventCount: 0, events: [message(now, 1, 1, usage(10, 2))] }
+    },
+  }
+  const result = await collectTokenUsage(query, {
+    days: 'all', now, readTimeoutMs: 10, readTimeoutPerMegabyteMs: 5, readTimeoutMaxMs: 5_000,
+    sessionStamps: new Map([
+      ['large', { size: 20e6, mtimeMs: 1_000 }],
+      ['small', { size: 100, mtimeMs: 1_000 }],
+    ]),
+  })
+  assert.equal(result.skippedSessions, 1)
+  assert.equal(result.sessionCount, 2)
+  assert.equal(result.allTime.totalTokens, 12)
 })
