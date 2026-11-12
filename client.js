@@ -59,6 +59,7 @@ window.__ModuleLoader__.load({
       loadFailed: (message) => `读取 Token 用量失败：${message}`,
       retry: '重试',
       incomplete: (count) => `${count} 个会话读取失败，统计可能不完整。`,
+      stale: (count) => `${count} 个会话的日志已更新，后台读取还没跟上，数字稍后会自动修正。`,
       pending: (count) => `还有 ${count} 个历史会话正在后台补齐，稍后刷新即可。`,
       truncated: '日历显示最近 365 天，顶部总量为全部历史。',
       tokens: 'tokens',
@@ -95,6 +96,7 @@ window.__ModuleLoader__.load({
       loadFailed: (message) => `Could not load token usage: ${message}`,
       retry: 'Retry',
       incomplete: (count) => `${count} session(s) could not be read; totals may be incomplete.`,
+      stale: (count) => `${count} session(s) changed after their numbers were read; the background scan will catch them up.`,
       pending: (count) => `${count} older session(s) are still being indexed in the background; refresh again shortly.`,
       truncated: 'The calendar shows the most recent 365 days; the headline covers all history.',
       tokens: 'tokens',
@@ -574,6 +576,7 @@ window.__ModuleLoader__.load({
       const hasUsage = all !== null && numberOf(all.totalTokens) > 0
       const skipped = data !== null ? numberOf(data.skippedSessions) : 0
       const pending = data !== null ? numberOf(data.pendingSessions) : 0
+      const stale = data !== null ? numberOf(data.staleSessions) : 0
       const busy = state.status === 'loading' || state.status === 'idle'
       const activity = data !== null && data.activity !== null && data.activity !== undefined
         && typeof data.activity === 'object' ? data.activity : null
@@ -626,6 +629,7 @@ window.__ModuleLoader__.load({
         if (!hasUsage) sections.push(h('p', { key: 'empty', className: 'llmtu-note' }, t.empty))
         if (data.seriesTruncated === true) sections.push(h('p', { key: 'truncated', className: 'llmtu-note' }, t.truncated))
         if (skipped > 0) sections.push(h('p', { key: 'incomplete', className: 'llmtu-note' }, t.incomplete(skipped)))
+        if (stale > 0) sections.push(h('p', { key: 'stale', className: 'llmtu-note' }, t.stale(stale)))
         if (pending > 0) sections.push(h('p', { key: 'pending', className: 'llmtu-note' }, t.pending(pending)))
       }
       if (busy && data !== null) sections.push(h('p', { key: 'refreshing', className: 'llmtu-note' }, t.refreshing))
