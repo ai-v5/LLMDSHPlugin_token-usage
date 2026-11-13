@@ -20,10 +20,13 @@ window.__ModuleLoader__.load({
     const STYLE_MARKER = 'data-llm-token-usage-style'
     /** Number of days the calendar shows, including today. */
     const CALENDAR_DAYS = 365
-    /** Cache age that makes an automatic refresh useful; the Host rescans only changed Sessions. */
-    const AUTO_REFRESH_MS = 20 * 60 * 1000
-    /** Timer cadence carries a small grace so the age check does not skip a beat. */
-    const AUTO_REFRESH_INTERVAL_MS = AUTO_REFRESH_MS + 60 * 1000
+    /**
+     * Re-read cadence while the page is visible. The Host answers from its own
+     * short-lived result cache and rescans only the Sessions whose log moved, so
+     * one poll a minute costs little more than the stat walk over stored logs.
+     * A cached document is only a first paint: every poll asks the Host again.
+     */
+    const POLL_INTERVAL_MS = 60_000
     /** A stuck Host scan must not leave the panel loading forever. */
     const REQUEST_TIMEOUT_MS = 75_000
     /** Versioned browser cache for the last successful stats document. */
@@ -42,6 +45,7 @@ window.__ModuleLoader__.load({
       cacheWrite: '缓存写入',
       sessions: '会话',
       today: '今日',
+      updated: (time) => `更新于 ${time}`,
       activeDays: '活跃天数',
       turns: '轮次',
       steps: '步骤',
@@ -79,6 +83,7 @@ window.__ModuleLoader__.load({
       cacheWrite: 'cache write',
       sessions: 'Sessions',
       today: 'Today',
+      updated: (time) => `Updated ${time}`,
       activeDays: 'Active days',
       turns: 'Turns',
       steps: 'Steps',
@@ -454,30 +459,29 @@ window.__ModuleLoader__.load({
       const t = MESSAGES[language]
       const [open, setOpen] = React.useState(false)
       const [sequence, setSequence] = React.useState(0)
-      const [state, setState] = React.useState({ status: 'idle', data: null, error: null })
+      const [state, setState] = React.useState({ status: 'idle', data: null, error: null, fetchedAt: null })
+      const [refreshing, setRefreshing] = React.useState(false)
       const [anchor, setAnchor] = React.useState(null)
       const rootRef = React.useRef(null)
       const buttonRef = React.useRef(null)
       const refreshRef = React.useRef(false)
 
-      /** Manual refresh bypasses host cache; automatic refresh never runs faster than hourly. */
+      /** Manual refresh bypasses the Host result cache; the poll below accepts it. */
       const requestRefresh = React.useCallback(() => {
         refreshRef.current = true
         setSequence(value => value + 1)
       }, [])
 
       React.useEffect(() => {
-        if (!open) return undefined
         const manual = refreshRef.current
         refreshRef.current = false
         const cached = readStatsCache()
-        const fresh = cached !== null && Date.now() - cached.at < AUTO_REFRESH_MS
         if (cached !== null) {
+          // Instant paint from the last successful read; the request below owns the numbers.
           setState(previous => previous.data === null
-            ? { status: 'ready', data: cached.data, error: null }
+            ? { status: 'ready', data: cached.data, error: null, fetchedAt: cached.at }
             : previous)
         }
-        if (cached !== null && fresh && !manual) return undefined
         const controller = new AbortController()
         let disposed = false
         let timedOut = false
@@ -485,48 +489,77 @@ window.__ModuleLoader__.load({
           timedOut = true
           controller.abort()
         }, REQUEST_TIMEOUT_MS)
+        if (manual) setRefreshing(true)
+        // A quiet poll keeps the numbers already on screen; only a first load spins.
         setState(previous => ({
-          status: 'loading',
+          status: previous.data === null ? 'loading' : previous.status,
           data: previous.data ?? cached?.data ?? null,
           error: null,
+          fetchedAt: previous.fetchedAt ?? cached?.at ?? null,
         }))
         const query = statsUrl(manual)
+        let settled = false
+        const settle = () => {
+          if (settled) return
+          settled = true
+          if (manual) setRefreshing(false)
+        }
         fetch(query, { cache: 'no-store', signal: controller.signal })
           .then((response) => {
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
             return response.json()
           })
           .then((data) => {
-            if (disposed) return
             clearTimeout(timer)
+            settle()
+            if (disposed) return
             if (timedOut) {
-              setState(previous => ({ status: 'error', data: previous.data, error: t.timeout }))
+              setState(previous => ({ ...previous, status: 'error', error: t.timeout }))
               return
             }
             writeStatsCache(data)
-            setState({ status: 'ready', data, error: null })
+            setState({ status: 'ready', data, error: null, fetchedAt: Date.now() })
           })
           .catch((error) => {
-            if (disposed) return
             clearTimeout(timer)
+            settle()
+            if (disposed) return
             if (controller.signal.aborted && !timedOut) return
             const message = timedOut
               ? t.timeout
               : error instanceof Error ? error.message : String(error)
-            setState(previous => ({ status: 'error', data: previous.data, error: message }))
+            setState(previous => ({
+              status: 'error',
+              data: previous.data,
+              error: message,
+              fetchedAt: previous.fetchedAt ?? null,
+            }))
           })
         return () => {
           disposed = true
           clearTimeout(timer)
           controller.abort()
         }
-      }, [open, sequence])
+      }, [sequence])
 
       React.useEffect(() => {
-        if (!open) return undefined
-        const timer = setInterval(() => { setSequence(value => value + 1) }, AUTO_REFRESH_INTERVAL_MS)
-        return () => { clearInterval(timer) }
-      }, [open])
+        /**
+         * Keep the summary and the collapsed badge current: poll on a fixed cadence
+         * and read again the moment the page becomes visible or regains focus.
+         */
+        const tick = () => {
+          if (document.visibilityState === 'hidden') return
+          setSequence(value => value + 1)
+        }
+        const timer = setInterval(tick, POLL_INTERVAL_MS)
+        document.addEventListener('visibilitychange', tick)
+        window.addEventListener('focus', tick)
+        return () => {
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', tick)
+          window.removeEventListener('focus', tick)
+        }
+      }, [])
 
       React.useLayoutEffect(() => {
         if (!open) return undefined
@@ -577,7 +610,11 @@ window.__ModuleLoader__.load({
       const skipped = data !== null ? numberOf(data.skippedSessions) : 0
       const pending = data !== null ? numberOf(data.pendingSessions) : 0
       const stale = data !== null ? numberOf(data.staleSessions) : 0
-      const busy = state.status === 'loading' || state.status === 'idle'
+      const busy = state.status === 'loading' || state.status === 'idle' || refreshing
+      /** Wall-clock time of the read the visible numbers came from. */
+      const updatedAt = state.fetchedAt === null || state.fetchedAt === undefined
+        ? null
+        : new Date(state.fetchedAt).toLocaleTimeString(language === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })
       const activity = data !== null && data.activity !== null && data.activity !== undefined
         && typeof data.activity === 'object' ? data.activity : null
 
@@ -603,7 +640,8 @@ window.__ModuleLoader__.load({
             }, formatTokens(all?.totalTokens)),
           ]),
           h('div', { key: 'meta', className: 'llmtu-summary-meta' },
-            `${t.today} ${formatTokens(today?.totalTokens)} · ${t.activeDays} ${activeDays} · ${t.sessions} ${numberOf(data.sessionCount)}`),
+            `${t.today} ${formatTokens(today?.totalTokens)} · ${t.activeDays} ${activeDays} · ${t.sessions} ${numberOf(data.sessionCount)}`
+            + (updatedAt === null ? '' : ` · ${t.updated(updatedAt)}`)),
         ]))
         sections.push(h('div', { key: 'metrics', className: 'llmtu-metrics' }, [
           h('div', { key: 'turns', className: 'llmtu-metric' }, [
